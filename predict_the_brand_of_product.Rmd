@@ -1,30 +1,246 @@
 ---
-title: "Predict the brand of products"
+title: "brand_prediction"
 author: "Ashiqur"
-date: "10/9/2019"
+date: "10/17/2019"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(message = FALSE)
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+## Loading data sets and libraries
+```{r data_lib,echo=TRUE}
+brands_choice <- read.csv(file="Data/CompleteResponses_train.csv", header = TRUE )
+brands_incomplete<-read.csv(file = "Data/SurveyIncomplete_test.csv", header = TRUE)
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+library(caret)
+library(dplyr)
+library(C50)
+library(ggplot2)
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
 
-```{r cars}
-summary(cars)
+```
+## Renaming attributes
+```{r rename, echo=TRUE}
+names(brands_choice) <- 
+  c("salary","age","education","car","zip","credit","brand")
+
+names(brands_incomplete) <- 
+  c("salary","age","education","car","zip","credit","brand")
 ```
 
-## Including Plots
+## changing name of the brands
+```{r pls_model, echo=TRUE}
 
-You can also embed plots, for example:
+brands_choice[which(brands_choice$brand == 0),]$brand = "Belkin"
+brands_choice[which(brands_choice$brand == 1),]$brand = "Elago"
 
-```{r pressure, echo=FALSE}
-plot(pressure)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+## preprocess
+```{r basic exploration}
+summary(brands_choice)
+```
+
+
+## feature selection
+```{r fselection,echo=TRUE}
+brands_choice_4f <- brands_choice %>% select("salary","age","education","brand")
+
+brands_incomplete_4f <- brands_incomplete %>% select("salary","age","education","brand")
+```
+
+
+## changing Data type
+```{r datachanging,echo=TRUE}
+brands_choice_4f$brand<-as.factor(brands_choice_4f$brand)
+
+brands_choice_4f$education<-as.factor(brands_choice_4f$education)
+
+brands_incomplete_4f$education<-as.factor(brands_incomplete_4f$education)
+
+
+```
+### Data partition
+define 75% train data and 25% test data split from the data set
+```{r partition,echo=TRUE}
+set.seed(123)#set random seed we can make this analysis repetable
+brands_choice_sample <- createDataPartition(brands_choice_4f$brand, p=.75, list = FALSE)
+
+
+brands_choice_train<-brands_choice_4f[brands_choice_sample,]#traning data 
+brands_choice_test<-brands_choice_4f[-brands_choice_sample,]#testing data
+brands_choice_train$brand <- as.factor(brands_choice_train$brand)
+```
+
+# Machine learning model
+
+### Partial Least Squares Analysis
+```{r PLS,echo=TRUE}
+ctrl <- trainControl(method = "repeatedcv", 
+                     number = 10,
+                     repeats = 3)
+plsFit <- train(brand~., data=brands_choice_train, 
+                method="pls", 
+                preProc=c("center","scale"),
+                tuneLength = 6,#no changes
+                trControl=ctrl)
+plsFit
+```
+
+## pls MODEL
+`
+```{r PLOT,echo=TRUE}
+ggplot(plsFit) 
+
+```
+#PLS model using Metric = ROC
+```{r pls_rock,echo=TRUE}
+ctrl_roc <- trainControl(method = "repeatedcv", 
+                     repeats = 3,
+                     number = 10,
+                     classProbs=TRUE, 
+                     summaryFunction=twoClassSummary)
+
+plsFit_roc <- train(brand~., data=brands_choice_train, 
+                method="pls", 
+                preProc=c("center","scale"),
+                tuneLength = 4,
+                trControl=ctrl_roc, 
+                metric="ROC")
+plsFit_roc
+```
+
+
+
+## pls plot with roc matric
+````{r PLOT_pls,echo=TRUE }
+ggplot(plsFit_roc)
+
+```
+
+## Importance of variables
+```{r imp_var, echo=TRUE}
+varImp(plsFit)
+#varImp(plsFit_roc)
+```
+## Prediction Model(PLS)
+```{r pred, echo=TRUE}
+plsPred <- predict(plsFit, 
+                   newdata = brands_choice_test)
+head(plsPred)
+postResample(plsPred, brands_choice_test$brand)
+summary(plsPred)
+```
+
+
+## Predictions for incomplete data-PLS
+```{r Brand_Prediction, echo=TRUE}
+brand_plsPred <- predict(plsFit, newdata = brands_incomplete_4f)
+summary(brand_plsPred)
+barplot(table(brand_plsPred))
+
+```
+
+
+
+## Random Forest Analysis
+
+```{r Random_Forest, echo=TRUE}
+grid = expand.grid(.mtry = c(2,3))
+
+ctrl <- trainControl(method = "oob" ,
+                     search = "grid",
+                     classProbs = TRUE
+                     )
+rfFit <- train(brand~., 
+               data=brands_choice_train, 
+               method="rf", 
+               preProc=c("center","scale"),
+               tuneGrid = grid,
+               trControl=ctrl
+               )
+rfFit
+ggplot(rfFit)
+```
+
+
+## Importance of variables in RandomForest model
+
+```{r imp_var_rf, echo=TRUE}
+varImp(rfFit)
+```
+## Prediction Model - Random Forest
+```{r pred_rf, echo=TRUE}
+rfPred <- predict(rfFit, 
+                  newdata=brands_choice_test, 
+                  type="raw")
+summary(rfPred)
+head(rfPred)
+postResample(rfPred, brands_choice_test$brand)
+```
+
+
+## Predictions for incomplete data  - Random Forest
+```{r Brand_Prediction_rf, echo=TRUE}
+rfPred <- predict(rfFit, 
+                  newdata = brands_incomplete_4f,
+                  type = "raw")
+
+summary(rfPred)
+barplot(table(rfPred))
+
+```
+
+## decission tree
+```{r decission_tree, echo=TRUE}
+#crossvalidation technique has been used
+ctrl <- trainControl(method = "repeatedcv", 
+                     number = 10,
+                     repeats = 1,
+                     classProbs = TRUE)
+
+
+#trained the model using decission tree(C5.0)
+c50Fit <- train(brand~., 
+                data = brands_choice_train,
+                method = "C5.0",
+                trControl = ctrl,
+                metric = "Accuracy", 
+                tuneLength = 2,
+                preProc = c("center", "scale"))
+
+print(c50Fit)
+#confusionMatrix(c50Pred, brands_choice_test$brand)
+plot(c50Fit, main="Decision Tree")
+
+saveRDS(c50Fit, "DecTreeModel.rds")
+print(c50Fit)
+
+```
+## Predictions for incomplete data  - decission Tree
+```{r Brand_Prediction_c5, echo=TRUE}
+DecTreeModel <- readRDS("DecTreeModel.rds")
+#predict  brand  from test data 
+DTPredictions <-predict(DecTreeModel, 
+                        newdata = brands_choice_test,
+                        type = "raw")
+
+
+summary(DTPredictions)
+head(DTPredictions)
+postResample(DTPredictions, brands_choice_test$brand)##??
+
+##predict incomplete data
+
+DTPredictions_in <-predict(DecTreeModel, 
+                        newdata = brands_incomplete_4f,
+                        type = "raw")
+barplot(table(DTPredictions_in))
+postResample(DTPredictions_in, brands_choice_test$brand)
+
+```
+Three models have been chosen to analyze this brand preference and decision tree is the good one as a model if you notice the accuracy.new incomplete data set has been taken as a test data to predict the brand preference and the ELAGO brand has found the most customer preference. Blackwell Electronics can pursue a deeper strategic relationship with ELAGO if you don't consider some other business factors.
+
